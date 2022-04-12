@@ -5,7 +5,7 @@ import torch.nn as nn
 from time import time
 from tqdm import tqdm
 from argparse import ArgumentParser
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, StepLR
 from torch_geometric.data import DataLoader
 
 from util import GraphExprDataset
@@ -27,7 +27,7 @@ class Model:
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     def build_model(self):
-        hid_dim = 512
+        hid_dim = 256
         dropout = 0.5
         device = DEVICE
 
@@ -48,8 +48,8 @@ class Trainer:
         self.model = model
         self.epochs = epochs
         self.device = DEVICE
-        self.optimizer = optim.Adam(model.parameters(), lr=0.001)
-        self.scheduler = ReduceLROnPlateau(self.optimizer, factor=0.2, patience=10, verbose=True)
+        self.optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=2e-6)
+        self.scheduler = StepLR(self.optimizer, step_size=30, gamma=0.1)
         self.criterion = nn.BCEWithLogitsLoss()
 
     def _train(self, data_loader):
@@ -57,17 +57,20 @@ class Trainer:
         epoch_loss = 0
 
         for i, data in enumerate(data_loader):
-            # out = [tgt_len, batch_size, vocab_size]
             data.to(self.device)
-            out = self.model(data)  # Perform a single forward pass.
+            # our = [batch_size, output_dim]
+            out = self.model(data)
             out = out.reshape(-1)
+            # target = [batch_size]
             target = data.y.to(self.device)
             target = target.float()
+            
             loss = self.criterion(out, target)  # Compute the loss.
+            self.optimizer.zero_grad()  # Clear gradients.
             loss.backward()  # Derive gradients.
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1)  
             self.optimizer.step()  # Update parameters based on gradients.
-            self.optimizer.zero_grad()  # Clear gradients.
+            
 
             epoch_loss += loss.item()
 
@@ -123,12 +126,11 @@ class Trainer:
                 trigger = 0
                 best_valid_loss = valid_loss
                 torch.save(model.state_dict(), f'saved_models/{model_name}.pt')
-            else:
-                trigger += 1
-                if trigger >= patience:
-                    break
-            
-            self.scheduler.step(valid_loss)
+            # else:
+            #     trigger += 1
+            #     if trigger >= patience:
+            #         break
+            self.scheduler.step()
         print(f'Best valid loss: {best_valid_loss:.4f}')
         print(f'Training time per epoch: {total_train_time/self.epochs:.4f}')
 
@@ -169,6 +171,7 @@ if __name__ == '__main__':
     print(f'Symbol vocab: {dataset.symbol_vocab}')
     print(f'Batch size: {args.batch_size}')
 
+
     # # === 2. Get model ==============================
     input_dim = dataset.num_node_features
     output_dim = 1
@@ -205,6 +208,6 @@ if __name__ == '__main__':
 
     y_true = torch.hstack(y_true)
     preds = torch.hstack(preds)
-    acc = (preds == y_true).sum().float() / y_true.shape[0] * 100.0
+    acc = calculate_accuracy(preds, y_true)
     print(f"testing acc = {acc}")
 
