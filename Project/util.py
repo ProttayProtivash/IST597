@@ -1,9 +1,12 @@
 import os
+import random
 from collections import deque
 import torch
 import json
 from tqdm import tqdm
 from torch_geometric.data import Data, InMemoryDataset
+from torch.utils.data import Dataset
+from binarytree import Node
 
 
 # TODO: do numeral decomposition
@@ -112,12 +115,12 @@ class BinaryTree:
 
 class EquationTree:
 
-    def __init__(self, vars, numNodes, variables, depth, nodeNum, func, label):
-        self.vars = vars.split(',')
+    def __init__(self, evars, numNodes, evariables, depth, nodeNum, func, label):
+        self.evars = evars.split(',')
         self.numNodes = int(numNodes)
-        self.variables = {}
-        for var_name, var_idx in variables.items():
-            self.variables[var_idx] = var_name
+        self.evariables = {}
+        for var_name, var_idx in evariables.items():
+            self.evariables[var_idx] = var_name
         self.nodeDepth = depth.split(',')
         self.depth = 0
         for d in self.nodeDepth:
@@ -128,7 +131,7 @@ class EquationTree:
         self.func = func.split(',')
         self.label = int(label)
 
-        assert len(self.vars) == len(self.nodeDepth)
+        assert len(self.evars) == len(self.nodeDepth)
         assert len(self.nodeDepth) == len(self.nodeNum)
         assert len(self.nodeNum) == len(self.func)
 
@@ -145,25 +148,23 @@ class EquationTree:
             node_idx.append(self.nodeNum[i])
 
             if self.func[i] == 'Symbol':
-                var_idx = int(self.vars[i].split('_')[1])
-                var_name = self.variables[var_idx]
+                var_idx = int(self.evars[i].split('_')[1])
+                var_name = self.evariables[var_idx]
                 node_symbol.append(var_name)
             elif self.func[i] == "NegativeOne":
-                node_symbol.append(-1)
+                node_symbol.append("Integer_-1")
             elif self.func[i] == "Pi":
-                node_symbol.append(self.vars[i])
+                node_symbol.append(self.evars[i])
             elif self.func[i] == "One":
-                node_symbol.append(1)
+                node_symbol.append("Integer_1")
             elif self.func[i] == "Half":
-                node_symbol.append(0.5)
+                node_symbol.append("Retional_1/2")
             elif self.func[i] == 'Integer':
-                node_symbol.append(int(self.vars[i]))
+                node_symbol.append("Integer_" + self.evars[i])
             elif self.func[i] == "Rational":
-                numerator, denominator = self.vars[i].split('/')
-                value = float(int(numerator) / int(denominator))
-                node_symbol.append(value)
+                node_symbol.append("Relational_" + self.evars[i])
             elif self.func[i] == "Float":
-                node_symbol.append(float(self.vars[i]))
+                node_symbol.append("Float_" + self.evars[i])
             else:
                 node_symbol.append(self.func[i])
 
@@ -217,7 +218,7 @@ def load_single_equation(example):
         }
     :return: An EquationTree corresponding to 'example', paired with it's depth and it's label
     """
-    vars = example['equation']['vars']
+    evars = example['equation']['vars']
     numNodes = example['equation']['numNodes']
     variables = example['equation']['variables']
     depth = example['equation']['depth']
@@ -225,7 +226,7 @@ def load_single_equation(example):
     func = example['equation']['func']
     label = example['label']
 
-    et = EquationTree(vars, numNodes, variables, depth, nodeNum, func, label)
+    et = EquationTree(evars, numNodes, variables, depth, nodeNum, func, label)
     return et, et.get_depth(), et.get_label()
 
 
@@ -264,6 +265,8 @@ def build_equation_tree_examples_list(train_jsonfile, test_jsonfile=None, val_js
         for i, group in enumerate(test_groups):
             for example in group:
                 et, d, label = load_single_equation(example)
+                if depth is not None and d not in depth:
+                    continue
                 test_trios.append((et, d, label))
                 et_symbols = et.get_symbols()
                 for s in et_symbols:
@@ -277,6 +280,8 @@ def build_equation_tree_examples_list(train_jsonfile, test_jsonfile=None, val_js
         for i, group in enumerate(val_groups):
             for example in group:
                 et, d, label = load_single_equation(example)
+                if depth is not None and d not in depth:
+                    continue
                 val_trios.append((et, d, label))
                 et_symbols = et.get_symbols()
                 for s in et_symbols:
@@ -292,9 +297,9 @@ class GraphExprDataset(InMemoryDataset):
     """
     def __init__(self, root, train_filename, test_filename, val_filename):
         self.symbol_vocab = None
-        self.train_filename = f'dataset/raw/{train_filename}'
-        self.test_filename = f'dataset/raw/{test_filename}'
-        self.val_filename = f'dataset/raw/{val_filename}'
+        self.train_filename = f'{root}/raw/{train_filename}'
+        self.test_filename = f'{root}/raw/{test_filename}'
+        self.val_filename = f'{root}/raw/{val_filename}'
         self.train_size = 0
         self.test_size = 0
         self.val_size = 0
@@ -336,7 +341,10 @@ class GraphExprDataset(InMemoryDataset):
     def process(self):
         data_list = []
 
-        symbol_dict, train_trios, test_trios, val_trios = build_equation_tree_examples_list(self.train_filename, self.test_filename, self.val_filename)
+        symbol_dict, train_trios, test_trios, val_trios = build_equation_tree_examples_list(self.train_filename, 
+                                                                                            self.test_filename, 
+                                                                                            self.val_filename,
+                                                                                            depth = None)
         self.symbol_vocab = symbol_dict
         trio_list = train_trios + test_trios + val_trios
         self.train_size = len(train_trios)
@@ -359,9 +367,96 @@ class GraphExprDataset(InMemoryDataset):
         torch.save((data, slices), self.processed_paths[0])
 
 
+def test_equation_tree(et):
+    bt = et.bt
+    check_root = Node(str(bt.root.node_idx) + ":" + bt.root.node_symbol)
+    stack = [(bt.root, check_root)]
+
+    while stack:
+        cur, check_cur = stack.pop()
+        if cur.left_child:
+            check_left = Node(str(cur.left_child.node_idx) + ":" + cur.left_child.node_symbol)
+            check_cur.left = check_left
+            stack.append((cur.left_child, check_left))
+        if cur.right_child:
+            check_right = Node(str(cur.right_child.node_idx) + ":" + cur.right_child.node_symbol)
+            check_cur.right = check_right
+            stack.append((cur.right_child, check_right))
+    
+    print(check_root)
+    print(check_root.inorder)
+
+
 if __name__ == "__main__":
-	dataset = GraphExprDataset('dataset', '40k_train.json', '40k_test.json', '40k_val_shallow.json')
-	print(f'train size: {dataset.train_size}')
-	print(f'test size: {dataset.test_size}')
-	print(f'val size: {dataset.val_size}')
+    # testing the EquationTree class
+    # randomly select a sample from each depth group and check the binary tree
+    train_jsonfile = './dataset/raw/40k_train.json'
+    test_jsonfile = './dataset/raw/40k_test.json'
+    val_jsonfile = './dataset/raw/40k_val_shallow.json'
+    files = [train_jsonfile, test_jsonfile, val_jsonfile]
+
+    for fidx, jsonfile in enumerate(files):
+        print(f"sampling from {jsonfile}...")
+        selected = []
+
+        with open(jsonfile, 'rt') as f:
+            group_list = json.loads(f.read())
+
+        for i, group in enumerate(group_list):
+            group_size = len(group)
+            if group_size == 0:
+                continue
+
+            sample_idx = random.randint(0, group_size-1)
+            example = group[sample_idx]
+            selected.append([example])
+
+            evars = example['equation']['vars']
+            numNodes = example['equation']['numNodes']
+            variables = example['equation']['variables']
+            depth = example['equation']['depth']
+            nodeNum = example['equation']['nodeNum']
+            func = example['equation']['func']
+            label = example['label']
+        
+            et = EquationTree(evars, numNodes, variables, depth, nodeNum, func, label)
+
+            if fidx == 0:
+                print(f"sample from group with tree depth={i+1}:")
+                print(f"depth: {depth}")
+                print(f"nodeNum: {nodeNum}")
+                print(f"func: {func}")
+                print(f"vars: {evars}")
+                print(f"variables: {variables}")
+                print(f"label: {label}")
+                print(f"levelorder symbol:{et.get_symbols()}")
+                test_equation_tree(et)
+                print()
+
+        print(f"selected {len(selected)} trees...")
+
+        filename = 'sampled_' + jsonfile.split('/')[-1]
+        with open(f'./test/raw/{filename}', 'w') as f:
+            json.dump(selected, f, indent=4)
+    
+
+    # testing the GraphExprDataset
+    # construct dataset from sampled examples, then check the edge_index and label
+    os.system(f'rm -rf test/processed/*')
+    dataset = GraphExprDataset('test', 'sampled_40k_train.json', 'sampled_40k_test.json', 'sampled_40k_val_shallow.json')
+    print(f'train size: {dataset.train_size}')
+    print(f'test size: {dataset.test_size}')
+    print(f'val size: {dataset.val_size}')
+    print(f'Symbol vocab: {dataset.symbol_vocab}')
+
+    train_set = dataset[:dataset.train_size]
+    test_set = dataset[dataset.train_size: (dataset.train_size+dataset.test_size)]
+    valid_set = dataset[(-dataset.val_size):]
+
+    for sample in train_set:
+        print(sample)
+        print(sample.x)
+        print(sample.edge_index)
+        print(sample.y)
+        print()
 
