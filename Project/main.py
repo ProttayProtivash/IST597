@@ -7,6 +7,7 @@ from tqdm import tqdm
 from argparse import ArgumentParser
 from torch.optim.lr_scheduler import ReduceLROnPlateau, StepLR
 from torch_geometric.data import DataLoader
+from sklearn.metrics import accuracy_score, precision_score, recall_score
 
 from util import GraphExprDataset
 from model.gnn import Encoder, GraphClassifier
@@ -96,18 +97,22 @@ class Trainer:
                 loss = self.criterion(out, target)            
                 epoch_loss += loss.item()
         
-        y_pred = torch.hstack(y_pred)
-        y_true = torch.hstack(y_true)
-        acc = calculate_accuracy(y_pred, y_true)
+        y_pred = torch.hstack(y_pred).cpu()
+        y_true = torch.hstack(y_true).cpu()
+        acc = accuracy_score(y_true, y_pred)
+        prec = precision_score(y_true, y_pred, pos_label=1, average='binary')
+        rcl = recall_score(y_true, y_pred, pos_label=1, average='binary')
+
         loss = epoch_loss / len(data_loader)
 
-        return loss, acc
+        return loss, acc, prec, rcl
 
     def training(self, train_iter, valid_iter, model_name):
         print()
         print('Training...')
         print('=======================================')
         best_valid_loss = float('inf')
+        best_metrics = {}
         # patience for early stopping
         patience = 20
         trigger = 0
@@ -118,13 +123,18 @@ class Trainer:
             train_loss = self._train(train_iter)
             total_train_time += time() - start_time
 
-            train_loss, train_acc = self._evaluate(train_iter)
-            valid_loss, val_acc = self._evaluate(valid_iter)
-            print(f'Epoch: {epoch+1}, train loss: {train_loss:.4f}, val loss: {valid_loss:.4f}, train acc: {train_acc:.4f}, val acc: {val_acc:.4f}')
+            train_loss, train_acc, train_prec, train_rcl = self._evaluate(train_iter)
+            valid_loss, val_acc, val_prec, val_rcl = self._evaluate(valid_iter)
+            print(f'Epoch: {epoch+1}, train loss: {train_loss:.4f}, train acc: {train_acc:.4f}, train prec: {train_prec:.4f}, train rcl: {train_rcl:.4f}, val loss: {valid_loss:.4f}, val acc: {val_acc:.4f}, val prec: {val_prec:.4f}, val rcl: {val_rcl:.4f}')
 
             if valid_loss < best_valid_loss:
                 trigger = 0
                 best_valid_loss = valid_loss
+                best_metrics.update({
+                    "acc": val_acc,
+                    "prec": val_prec,
+                    "rcl": val_rcl
+                })
                 torch.save(model.state_dict(), f'saved_models/{model_name}.pt')
             # else:
             #     trigger += 1
@@ -132,11 +142,9 @@ class Trainer:
             #         break
             self.scheduler.step()
         print(f'Best valid loss: {best_valid_loss:.4f}')
+        print(f'Best metrics: {best_metrics}')
         print(f'Training time per epoch: {total_train_time/self.epochs:.4f}')
 
-def calculate_accuracy(y_pred, y_true):
-    acc = (y_pred == y_true).sum().float() / y_true.shape[0] * 100.0
-    return acc
 
 if __name__ == '__main__':
     """
@@ -146,11 +154,12 @@ if __name__ == '__main__':
         epochs: epochs
     """
     parser = ArgumentParser(description='GraphMR')
-    parser.add_argument('--train', type=bool, default=True, help='whether to train the model')
+    parser.add_argument('--train', type=int, default=1, help='whether to train the model')
     parser.add_argument('--batch_size', type=int, default=128, help='size of each mini batch')
     parser.add_argument('--epochs', type=int, default=100, help='training epochs')
 
     args = parser.parse_args()
+    print(args.train)
 
     # === 1. Get dataset ==============================
     # Before creating dataset, destination folder should be empty
@@ -177,12 +186,12 @@ if __name__ == '__main__':
     output_dim = 1
     model = Model(input_dim, output_dim).build_model()
 
+    model_name = 'graphmr_ast'
     # # === 3. Training ==============================
     if args.train:
         train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
         valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False)
 
-        model_name = 'graphmr_ast'
         trainer = Trainer(model, args.epochs)
         trainer.training(train_loader, valid_loader, model_name)
 
@@ -206,8 +215,10 @@ if __name__ == '__main__':
             preds.append(out)
             y_true.append(data.y)
 
-    y_true = torch.hstack(y_true)
-    preds = torch.hstack(preds)
-    acc = calculate_accuracy(preds, y_true)
-    print(f"testing acc = {acc}")
+    y_true = torch.hstack(y_true).cpu()
+    preds = torch.hstack(preds).cpu()
+    acc = accuracy_score(y_true, preds)
+    prec = precision_score(y_true, preds, pos_label=1, average='binary')
+    rcl = recall_score(y_true, preds, pos_label=1, average='binary')
+    print(f"test acc = {acc:4f}, test prec: {prec:.4f}, test rcl: {rcl:.4f}")
 
