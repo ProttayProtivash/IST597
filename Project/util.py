@@ -250,7 +250,7 @@ def build_equation_tree_examples_list(train_jsonfile, test_jsonfile=None, val_js
     for i, group in enumerate(group_list):
         for example in group:
             et, d, label = load_single_equation(example)
-            if depth is not None and d not in depth:
+            if d not in depth['train']:
                 continue
             train_trios.append((et, d, label))
             et_symbols = et.get_symbols()
@@ -265,8 +265,8 @@ def build_equation_tree_examples_list(train_jsonfile, test_jsonfile=None, val_js
         for i, group in enumerate(test_groups):
             for example in group:
                 et, d, label = load_single_equation(example)
-                if depth is not None and d not in depth:
-                    continue
+                if d not in depth['test']:
+                  continue
                 test_trios.append((et, d, label))
                 et_symbols = et.get_symbols()
                 for s in et_symbols:
@@ -280,8 +280,8 @@ def build_equation_tree_examples_list(train_jsonfile, test_jsonfile=None, val_js
         for i, group in enumerate(val_groups):
             for example in group:
                 et, d, label = load_single_equation(example)
-                if depth is not None and d not in depth:
-                    continue
+                if d not in depth['val']:
+                  continue
                 val_trios.append((et, d, label))
                 et_symbols = et.get_symbols()
                 for s in et_symbols:
@@ -340,11 +340,15 @@ class GraphExprDataset(InMemoryDataset):
 
     def process(self):
         data_list = []
-
+        depth_dict = {}
+        depth_dict['train'] = [0,1,2,3,4,5,6,7]
+        depth_dict['test'] = [8,9,10,11,12,13,14,15]
+        depth_dict['val'] = [0,1,2,3,4,5,6,7]
+    
         symbol_dict, train_trios, test_trios, val_trios = build_equation_tree_examples_list(self.train_filename, 
                                                                                             self.test_filename, 
                                                                                             self.val_filename,
-                                                                                            depth = None)
+                                                                                            depth_dict)
         self.symbol_vocab = symbol_dict
         trio_list = train_trios + test_trios + val_trios
         self.train_size = len(train_trios)
