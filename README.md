@@ -1,3 +1,6 @@
+[this subtext](Assignment_00010)
+
+
 ## Running Experiments
 To run the reconstruction experiments on a dataset protected using individual local sensitivity, run the IDPReconstruction.py script, which depends on the query answering mechanism in ProtectedDataset.py. The query-answering mechanism takes a filename (csv format), a k value, and lists of the categorical and numerical columns. This object can then be passed to the attacker class, along with a precision level, initial wide bounds for reconstructing numerical columns, and the order by which to reconstruct the columns. Reconstructed values are truncated, not rounded, to the precision value.
 
